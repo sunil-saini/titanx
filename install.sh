@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # titanx installer — stand up the Titan Ops Console Claude project and audit
-# the companion MCPs / CLIs that ops-mcp hands off to for live data.
+# the companion CLIs / MCPs that ops-mcp hands off to for live data.
 #
 # ops-mcp is a HOSTED HTTP MCP server (https://api.ops.flock.com/ops-mcp), so there is
 # nothing to run locally — "installing" it means registering that endpoint, which the
 # scaffolded project's .mcp.json does. This script:
 #   1. scaffolds the ops console project (from the bundled template) into TARGET_DIR,
 #   2. checks the ops-mcp endpoint is reachable,
-#   3. audits each companion and configures the project .mcp.json:
-#      Grafana + Sentry: MCP preferred — bundled into project .mcp.json if not at user level.
-#      Kubernetes + GitHub: CLI preferred (kubectl / gh); MCP accepted as fallback.
+#   3. audits each companion (CLI preferred over MCP for all tools):
+#      Grafana: gcx CLI (https://github.com/grafana/gcx) — uses GRAFANA_TOKEN from .env
+#      Sentry:  sentry CLI (https://cli.sentry.dev)      — uses SENTRY_AUTH_TOKEN from .env
+#      Kubernetes + GitHub: kubectl / gh; MCP accepted as fallback.
 #
 # Usage:
 #   ./install.sh [TARGET_DIR] [-f|--force]
@@ -103,36 +104,40 @@ fetch_tokens(){
   done <<< "$raw"
 }
 
-# write_project_mcp_json writes the project .mcp.json from scratch.
-# Always includes ops-mcp. Includes grafana/sentry when GRAFANA_INJECTED/
-# SENTRY_INJECTED are set; uses the fetched token or a ${VAR} placeholder
-# (Claude Code expands env vars in .mcp.json) as fallback.
+# write_project_mcp_json writes the project .mcp.json with ops-mcp only.
+# Grafana and Sentry are handled via gcx/sentry CLIs (tokens in .env);
+# user-level MCPs are accepted as fallback if the CLIs aren't installed.
 write_project_mcp_json(){
   local path="$1"
-  local fallback_grafana='${TITANX_GRAFANA_TOKEN}'
-  local fallback_sentry='${TITANX_SENTRY_TOKEN}'
-  local g_tok="${TITANX_GRAFANA_TOKEN:-$fallback_grafana}"
-  local s_tok="${TITANX_SENTRY_TOKEN:-$fallback_sentry}"
+  printf '{\n  "mcpServers": {\n    "ops-mcp": {\n      "type": "http",\n      "url": "https://api.ops.flock.com/ops-mcp"\n    }\n  }\n}\n' > "$path"
+}
+
+# write_env_file path [inc_grafana=1] [inc_sentry=1]
+# Written only when gcx or sentry CLI is absent; skips a section when flag=0.
+# gcx reads GRAFANA_TOKEN; sentry CLI reads SENTRY_AUTH_TOKEN.
+# Claude Code injects .env vars into the shell environment automatically.
+write_env_file(){
+  local path="$1" inc_grafana="${2:-1}" inc_sentry="${3:-1}"
   {
-    printf '{\n  "mcpServers": {\n'
-    printf '    "ops-mcp": {\n      "type": "http",\n      "url": "https://api.ops.flock.com/ops-mcp"\n    }'
-    if [ "${GRAFANA_INJECTED:-0}" -eq 1 ]; then
-      printf ',\n    "grafana": {\n'
-      printf '      "command": "uvx",\n      "args": ["mcp-grafana"],\n'
-      printf '      "env": {\n'
-      printf '        "GRAFANA_URL": "https://grafana.eks.ops.titan.email",\n'
-      printf '        "GRAFANA_SERVICE_ACCOUNT_TOKEN": "%s"\n' "$g_tok"
-      printf '      }\n    }'
+    printf '# Read-only service-account tokens — written by titanx installer\n'
+    if [ "$inc_grafana" -eq 1 ]; then
+      printf '# gcx (Grafana CLI): https://github.com/grafana/gcx\n'
+      printf 'GRAFANA_URL=https://grafana.eks.ops.titan.email\n'
+      if [ -n "$TITANX_GRAFANA_TOKEN" ]; then
+        printf 'GRAFANA_TOKEN=%s\n' "$TITANX_GRAFANA_TOKEN"
+      else
+        printf '#GRAFANA_TOKEN=<unavailable — ask in #devops-tooling>\n'
+      fi
     fi
-    if [ "${SENTRY_INJECTED:-0}" -eq 1 ]; then
-      printf ',\n    "sentry": {\n'
-      printf '      "command": "npx",\n      "args": ["-y", "@sentry/mcp-server@latest"],\n'
-      printf '      "env": {\n'
-      printf '        "SENTRY_HOST": "sentry.eks.ops.titan.email",\n'
-      printf '        "SENTRY_ACCESS_TOKEN": "%s"\n' "$s_tok"
-      printf '      }\n    }'
+    if [ "$inc_sentry" -eq 1 ]; then
+      printf '# sentry CLI: https://cli.sentry.dev\n'
+      printf 'SENTRY_URL=https://sentry.eks.ops.titan.email\n'
+      if [ -n "$TITANX_SENTRY_TOKEN" ]; then
+        printf 'SENTRY_AUTH_TOKEN=%s\n' "$TITANX_SENTRY_TOKEN"
+      else
+        printf '#SENTRY_AUTH_TOKEN=<unavailable — ask in #devops-tooling>\n'
+      fi
     fi
-    printf '\n  }\n}\n'
   } > "$path"
 }
 
@@ -237,69 +242,67 @@ else
   echo -e "   ${symbol_warn} curl not found — skipping reachability check"
 fi
 
-if have npx; then
-  echo -e "   ${symbol_success} npx detected ${COLOR_GRAY}(required for Sentry MCP)${COLOR_RESET}"
-else
-  echo -e "   ${symbol_warn} npx not found ${COLOR_GRAY}(required for Sentry MCP)${COLOR_RESET}"
-  echo -e "     ${COLOR_GRAY}Install Node.js: ${COLOR_UNDERLINE}https://nodejs.org${COLOR_RESET}"
-fi
-
-if have uvx; then
-  echo -e "   ${symbol_success} uvx detected ${COLOR_GRAY}(required for Grafana MCP)${COLOR_RESET}"
-else
-  echo -e "   ${symbol_warn} uvx not found ${COLOR_GRAY}(required for Grafana MCP)${COLOR_RESET}"
-  echo -e "     ${COLOR_GRAY}Install uv: ${COLOR_UNDERLINE}curl -LsSf https://astral.sh/uv/install.sh | sh${COLOR_RESET}"
-fi
 echo
 
 # 4) companion audit ---------------------------------------------------------
 missing_required=0
-MCP_JSON="$TARGET/.mcp.json"
+mcp_used=0          # any tool falling back to MCP instead of CLI
+need_env_grafana=0
+need_env_sentry=0
 
-# Decide what to inject (user-level check), fetch tokens from S3, write .mcp.json.
-GRAFANA_INJECTED=0; SENTRY_INJECTED=0
-mcp_present "grafana" || GRAFANA_INJECTED=1
-mcp_present "sentry"  || SENTRY_INJECTED=1
+MCP_JSON="$TARGET/.mcp.json"
+CLI_PREFERRED_DOC="https://www.anthropic.com/engineering/code-execution-with-mcp"
+
 fetch_tokens
 write_project_mcp_json "$MCP_JSON"
 
 echo -e " ${COLOR_BOLD}Step 4: Auditing Companion Integrations${COLOR_RESET}"
-echo -e "   ${COLOR_GRAY}Grafana + Sentry: MCP preferred (bundled into project if not at user level).${COLOR_RESET}"
-echo -e "   ${COLOR_GRAY}Kubernetes + GitHub: CLI preferred; MCP accepted as fallback.${COLOR_RESET}\n"
+echo -e "   ${COLOR_GRAY}CLI preferred for all tools — optimised for token usage. MCP accepted as fallback.${COLOR_RESET}\n"
 
-# --- Observability & errors (Grafana, Sentry) — MCP only, no CLI fallback ---
+# --- Observability (Grafana, Sentry) — gcx / sentry CLI preferred ---
 echo -e "   ${COLOR_GRAY}Observability & Errors:${COLOR_RESET}"
 
 padded_grafana=$(printf "%-14s" "Grafana")
-if [ "$GRAFANA_INJECTED" -eq 0 ]; then
-  echo -e "   ${symbol_success} ${padded_grafana} ${COLOR_GRAY}→${COLOR_RESET} user-level MCP (${COLOR_GREEN}grafana${COLOR_RESET})"
-elif [ -n "$TITANX_GRAFANA_TOKEN" ]; then
-  echo -e "   ${symbol_success} ${padded_grafana} ${COLOR_GRAY}→${COLOR_RESET} project .mcp.json (${COLOR_GREEN}grafana${COLOR_RESET})"
+if have gcx; then
+  echo -e "   ${symbol_success} ${padded_grafana} ${COLOR_GRAY}→${COLOR_RESET} CLI (${COLOR_GREEN}gcx${COLOR_RESET})"
+elif mcp_present "grafana"; then
+  echo -e "   ${symbol_warn} ${padded_grafana} ${COLOR_GRAY}→${COLOR_RESET} MCP fallback (${COLOR_YELLOW}grafana${COLOR_RESET}) — install gcx: ${COLOR_UNDERLINE}https://github.com/grafana/gcx${COLOR_RESET}"
+  echo -e "                  ${COLOR_GRAY}Endpoint: grafana.eks.ops.titan.email · token → ${COLOR_RESET}$TARGET/.env ${COLOR_GRAY}as ${COLOR_RESET}GRAFANA_TOKEN"
+  mcp_used=1; need_env_grafana=1
 else
-  echo -e "   ${symbol_warn} ${padded_grafana} ${COLOR_GRAY}→${COLOR_RESET} project .mcp.json (${COLOR_YELLOW}grafana${COLOR_RESET}) — token unavailable"
-  echo -e "                  ${COLOR_GRAY}Set ${COLOR_RESET}TITANX_GRAFANA_TOKEN${COLOR_GRAY} in your environment before launching Claude${COLOR_RESET}"
+  echo -e "   ${symbol_warn} ${padded_grafana} ${COLOR_GRAY}→${COLOR_RESET} not found — install gcx: ${COLOR_UNDERLINE}https://github.com/grafana/gcx${COLOR_RESET}"
+  echo -e "                  ${COLOR_GRAY}Endpoint: grafana.eks.ops.titan.email · token → ${COLOR_RESET}$TARGET/.env ${COLOR_GRAY}as ${COLOR_RESET}GRAFANA_TOKEN"
+  need_env_grafana=1
 fi
 
 padded_sentry=$(printf "%-14s" "Sentry")
-if [ "$SENTRY_INJECTED" -eq 0 ]; then
-  echo -e "   ${symbol_success} ${padded_sentry} ${COLOR_GRAY}→${COLOR_RESET} user-level MCP (${COLOR_GREEN}sentry${COLOR_RESET})"
-elif [ -n "$TITANX_SENTRY_TOKEN" ]; then
-  echo -e "   ${symbol_success} ${padded_sentry} ${COLOR_GRAY}→${COLOR_RESET} project .mcp.json (${COLOR_GREEN}sentry${COLOR_RESET})"
+if have sentry; then
+  echo -e "   ${symbol_success} ${padded_sentry} ${COLOR_GRAY}→${COLOR_RESET} CLI (${COLOR_GREEN}sentry${COLOR_RESET})"
+elif mcp_present "sentry"; then
+  echo -e "   ${symbol_warn} ${padded_sentry} ${COLOR_GRAY}→${COLOR_RESET} MCP fallback (${COLOR_YELLOW}sentry${COLOR_RESET}) — install sentry CLI: ${COLOR_UNDERLINE}https://cli.sentry.dev${COLOR_RESET}"
+  echo -e "                  ${COLOR_GRAY}Endpoint: sentry.eks.ops.titan.email · token → ${COLOR_RESET}$TARGET/.env ${COLOR_GRAY}as ${COLOR_RESET}SENTRY_AUTH_TOKEN"
+  mcp_used=1; need_env_sentry=1
 else
-  echo -e "   ${symbol_warn} ${padded_sentry} ${COLOR_GRAY}→${COLOR_RESET} project .mcp.json (${COLOR_YELLOW}sentry${COLOR_RESET}) — token unavailable"
-  echo -e "                  ${COLOR_GRAY}Set ${COLOR_RESET}TITANX_SENTRY_TOKEN${COLOR_GRAY} in your environment before launching Claude${COLOR_RESET}"
+  echo -e "   ${symbol_warn} ${padded_sentry} ${COLOR_GRAY}→${COLOR_RESET} not found — install sentry CLI: ${COLOR_UNDERLINE}https://cli.sentry.dev${COLOR_RESET}"
+  echo -e "                  ${COLOR_GRAY}Endpoint: sentry.eks.ops.titan.email · token → ${COLOR_RESET}$TARGET/.env ${COLOR_GRAY}as ${COLOR_RESET}SENTRY_AUTH_TOKEN"
+  need_env_sentry=1
+fi
+
+# Write .env only when at least one observability CLI is absent
+if [ "$need_env_grafana" -eq 1 ] || [ "$need_env_sentry" -eq 1 ]; then
+  write_env_file "$TARGET/.env" "$need_env_grafana" "$need_env_sentry"
 fi
 
 # --- Code & infra (kubectl, gh) — CLI preferred ---
 echo
-echo -e "   ${COLOR_GRAY}Code & Infra (CLI preferred):${COLOR_RESET}"
+echo -e "   ${COLOR_GRAY}Code & Infra:${COLOR_RESET}"
 
 padded_k8s=$(printf "%-14s" "Kubernetes")
 if have kubectl; then
   echo -e "   ${symbol_success} ${padded_k8s} ${COLOR_GRAY}→${COLOR_RESET} CLI (${COLOR_GREEN}kubectl${COLOR_RESET})"
 elif mcp_present "kubernetes"; then
-  echo -e "   ${symbol_warn} ${padded_k8s} ${COLOR_GRAY}→${COLOR_RESET} MCP fallback (${COLOR_YELLOW}kubernetes${COLOR_RESET})"
-  echo -e "                  ${COLOR_GRAY}kubectl is preferred — install it for direct cluster access${COLOR_RESET}"
+  echo -e "   ${symbol_warn} ${padded_k8s} ${COLOR_GRAY}→${COLOR_RESET} MCP fallback (${COLOR_YELLOW}kubernetes${COLOR_RESET}) — install kubectl: ${COLOR_UNDERLINE}https://kubernetes.io/docs/tasks/tools${COLOR_RESET}"
+  mcp_used=1
 else
   echo -e "   ${symbol_error} ${padded_k8s} ${COLOR_GRAY}→${COLOR_RESET} ${COLOR_RED}MISSING (REQUIRED)${COLOR_RESET}"
   echo -e "                  Install kubectl: ${COLOR_UNDERLINE}https://kubernetes.io/docs/tasks/tools${COLOR_RESET}"
@@ -310,8 +313,8 @@ padded_code=$(printf "%-14s" "Code")
 if have gh; then
   echo -e "   ${symbol_success} ${padded_code} ${COLOR_GRAY}→${COLOR_RESET} CLI (${COLOR_GREEN}gh${COLOR_RESET})"
 elif mcp_present "github"; then
-  echo -e "   ${symbol_warn} ${padded_code} ${COLOR_GRAY}→${COLOR_RESET} MCP fallback (${COLOR_YELLOW}github${COLOR_RESET})"
-  echo -e "                  ${COLOR_GRAY}gh CLI is preferred — run ${COLOR_RESET}gh auth login${COLOR_GRAY} after install${COLOR_RESET}"
+  echo -e "   ${symbol_warn} ${padded_code} ${COLOR_GRAY}→${COLOR_RESET} MCP fallback (${COLOR_YELLOW}github${COLOR_RESET}) — install gh CLI: ${COLOR_UNDERLINE}https://cli.github.com${COLOR_RESET}"
+  mcp_used=1
 else
   echo -e "   ${symbol_error} ${padded_code} ${COLOR_GRAY}→${COLOR_RESET} ${COLOR_RED}MISSING (REQUIRED)${COLOR_RESET}"
   echo -e "                  Install gh CLI: ${COLOR_UNDERLINE}https://cli.github.com${COLOR_RESET}${COLOR_GRAY}, then run ${COLOR_RESET}gh auth login"
@@ -324,6 +327,12 @@ if mcp_present "confluence" || mcp_present "rovo"; then
 else
   echo -e "   ${symbol_bullet} ${padded_wiki} ${COLOR_GRAY}→${COLOR_RESET} optional not found"
   echo -e "                  ${COLOR_GRAY}Allows access to: team docs + runbooks${COLOR_RESET}"
+fi
+
+if [ "$mcp_used" -eq 1 ]; then
+  echo
+  echo -e "   ${symbol_info} ${COLOR_YELLOW}CLIs use far fewer tokens than MCPs for the same tasks${COLOR_RESET}"
+  echo -e "     ${COLOR_UNDERLINE}${CLI_PREFERRED_DOC}${COLOR_RESET}"
 fi
 echo
 
