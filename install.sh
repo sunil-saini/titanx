@@ -208,7 +208,7 @@ select_agent() {
     local bin="${entries[$idx]}" label="${labels[$idx]}"
     local marker="  "
     [ "$bin" = "$current" ] && marker="${COLOR_PURPLE}➜${COLOR_RESET} "
-    printf "   %s%d) %-12s ${COLOR_GRAY}%s${COLOR_RESET}\n" "$marker" "$(( idx + 1 ))" "$bin" "$label"
+    printf "   %b%d) %-12s ${COLOR_GRAY}%s${COLOR_RESET}\n" "$marker" "$(( idx + 1 ))" "$bin" "$label"
   done
   printf "   ${COLOR_GRAY}Press number to select❯${COLOR_RESET} "
   local choice
