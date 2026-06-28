@@ -285,6 +285,7 @@ titanx() {
       echo "    titanx -u/--update       manually pull latest template from S3"
       echo "    titanx -i/--info         show version, agent, and last update time"
       echo "    titanx -x/--uninstall    remove titanx from this system"
+      echo "    titanx -d/--doctor       diagnose and check integrations"
       echo "    titanx -h/--help         show this help"
       echo ""
       ;;
@@ -369,6 +370,9 @@ titanx() {
       esac
       echo ""
       ;;
+    -d|--doctor)
+      bash "$DIR/doctor.sh"
+      ;;
     -x|--uninstall)
       echo ""
       echo "  Uninstalling titanx..."
@@ -379,7 +383,7 @@ titanx() {
       esac
       if [ -n "$rc_file" ] && [ -f "$rc_file" ]; then
         local tmp; tmp=$(mktemp)
-        grep -v "titanx\.sh" "$rc_file" > "$tmp"
+        grep -v -e "^# titanx shell integration" -e "titanx\.sh" "$rc_file" > "$tmp"
         cat "$tmp" > "$rc_file"; rm -f "$tmp"
         echo "  Removed shell integration from $rc_file"
       fi
@@ -483,7 +487,7 @@ echo
 # 1b) separate operational files into ~/.titanx --------------------------------
 TITANX_DOTDIR="$HOME/.titanx"
 mkdir -p "$TITANX_DOTDIR"
-for f in update.sh conf.txt manifest.txt version.txt; do
+for f in update.sh doctor.sh conf.txt manifest.txt version.txt; do
   if [ -f "$TARGET/$f" ]; then
     cp "$TARGET/$f" "$TITANX_DOTDIR/$f"
     rm "$TARGET/$f"
@@ -552,6 +556,9 @@ MCP_JSON="$TARGET/.mcp.json"
 fetch_tokens
 write_project_mcp_json "$MCP_JSON"
 
+# Source check predicates from doctor.sh (shared with `titanx -d`)
+source "$HOME/.titanx/doctor.sh" 2>/dev/null || true
+
 echo -e " ${COLOR_BOLD}Step 4: Auditing Companion Integrations${COLOR_RESET}"
 echo -e "   ${COLOR_GRAY}CLI preferred for all tools — optimised for token usage. MCP accepted as fallback.${COLOR_RESET}\n"
 
@@ -559,7 +566,7 @@ echo -e "   ${COLOR_GRAY}CLI preferred for all tools — optimised for token usa
 echo -e "   ${COLOR_GRAY}Observability & Errors:${COLOR_RESET}"
 
 padded_grafana=$(printf "%-14s" "Grafana")
-if have gcx; then
+if check_gcx; then
   echo -e "   ${symbol_success} ${padded_grafana} ${COLOR_GRAY}→${COLOR_RESET} CLI (${COLOR_GREEN}gcx${COLOR_RESET})"
 elif mcp_present "grafana"; then
   echo -e "   ${symbol_warn} ${padded_grafana} ${COLOR_GRAY}→${COLOR_RESET} MCP fallback (${COLOR_YELLOW}grafana${COLOR_RESET}) — install gcx: ${COLOR_UNDERLINE}${URL_GCX}${COLOR_RESET}"
@@ -572,7 +579,7 @@ else
 fi
 
 padded_sentry=$(printf "%-14s" "Sentry")
-if have sentry; then
+if check_sentry; then
   echo -e "   ${symbol_success} ${padded_sentry} ${COLOR_GRAY}→${COLOR_RESET} CLI (${COLOR_GREEN}sentry${COLOR_RESET})"
 elif mcp_present "sentry"; then
   echo -e "   ${symbol_warn} ${padded_sentry} ${COLOR_GRAY}→${COLOR_RESET} MCP fallback (${COLOR_YELLOW}sentry${COLOR_RESET}) — install sentry CLI: ${COLOR_UNDERLINE}${URL_SENTRY_CLI}${COLOR_RESET}"
@@ -594,7 +601,7 @@ echo
 echo -e "   ${COLOR_GRAY}Code & Infra:${COLOR_RESET}"
 
 padded_k8s=$(printf "%-14s" "Kubernetes")
-if have kubectl; then
+if check_kubectl; then
   echo -e "   ${symbol_success} ${padded_k8s} ${COLOR_GRAY}→${COLOR_RESET} CLI (${COLOR_GREEN}kubectl${COLOR_RESET})"
 elif mcp_present "kubernetes"; then
   echo -e "   ${symbol_warn} ${padded_k8s} ${COLOR_GRAY}→${COLOR_RESET} MCP fallback (${COLOR_YELLOW}kubernetes${COLOR_RESET}) — install kubectl: ${COLOR_UNDERLINE}${URL_KUBECTL}${COLOR_RESET}"
@@ -606,7 +613,7 @@ else
 fi
 
 padded_code=$(printf "%-14s" "Code")
-if have gh; then
+if check_gh; then
   echo -e "   ${symbol_success} ${padded_code} ${COLOR_GRAY}→${COLOR_RESET} CLI (${COLOR_GREEN}gh${COLOR_RESET})"
 elif mcp_present "github"; then
   echo -e "   ${symbol_warn} ${padded_code} ${COLOR_GRAY}→${COLOR_RESET} MCP fallback (${COLOR_YELLOW}github${COLOR_RESET}) — install gh CLI: ${COLOR_UNDERLINE}${URL_GH_CLI}${COLOR_RESET}"
