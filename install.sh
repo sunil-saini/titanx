@@ -292,7 +292,6 @@ titanx() {
     -i|--info)
       echo ""
       echo "  titanx info"
-      echo "  ${COLOR_GRAY}────────────────────${COLOR_RESET}"
       printf "  ${COLOR_BOLD}%-10s${COLOR_RESET} %s\n" "Version" "${version:-(unknown)}"
       printf "  ${COLOR_BOLD}%-10s${COLOR_RESET} %s\n" "Agent"   "$agent"
       printf "  ${COLOR_BOLD}%-10s${COLOR_RESET} %s\n" "Updated" "${last_updated:-(never)}"
