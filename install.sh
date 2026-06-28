@@ -386,14 +386,9 @@ titanx() {
         cat "$tmp" > "$rc_file"; rm -f "$tmp"
         echo "  Removed shell integration from $rc_file"
       fi
-      if [ -d "$DIR" ]; then
-        rm -rf "$DIR"
-        echo "  Removed $DIR"
-      fi
-      if [ "$PROJECT_DIR" != "$DIR" ] && [ -d "$PROJECT_DIR" ]; then
-        echo "  Project directory preserved at $PROJECT_DIR"
-        echo "  Remove it manually: rm -rf $PROJECT_DIR"
-      fi
+      for d in "$DIR" "$PROJECT_DIR"; do
+        [ -d "$d" ] && rm -rf "$d" && echo "  Removed $d"
+      done
       echo "  titanx uninstalled. Restart your shell or run: exec ${SHELL##*/}"
       echo ""
       ;;
