@@ -223,7 +223,7 @@ select_agent() {
 
 # write_agent_conf writes/updates AGENT in conf.txt.
 write_agent_conf() {
-  local agent="$1" conf="$TARGET/conf.txt"
+  local agent="$1" conf="$HOME/.titanx/conf.txt"
   if [ -f "$conf" ]; then
     local tmp; tmp="$(mktemp)"
     grep -v '^AGENT=' "$conf" > "$tmp"
@@ -234,7 +234,7 @@ write_agent_conf() {
 
 # set_titanx_function writes the titanx shell function to a script and sources it in user's rc file.
 set_titanx_function() {
-  local target="$TARGET"
+  local target="$TARGET" titanx_dir="$HOME/.titanx"
   case "${SHELL##*/}" in
     zsh)  ALIAS_RC="$HOME/.zshrc" ;;
     bash) ALIAS_RC="$HOME/.bashrc" ;;
@@ -243,8 +243,9 @@ set_titanx_function() {
       return ;;
   esac
 
-  # Write the titanx.sh script to the target directory
-  cat > "$target/titanx.sh" << 'SH_EOF'
+  # Write the titanx.sh script to ~/.titanx/
+  mkdir -p "$titanx_dir"
+  cat > "$titanx_dir/titanx.sh" << 'SH_EOF'
 # titanx shell integration — sourced from shell RC
 
 # Determine directory of this sourced script dynamically
@@ -262,6 +263,7 @@ titanx() {
     echo "Error: Could not resolve titanx project directory." >&2
     return 1
   fi
+  local PROJECT_DIR="$(cat "$DIR/project" 2>/dev/null || echo "$HOME/titanx")"
   local CONF="$DIR/conf.txt"
   local agent model version last_updated
 
@@ -291,7 +293,7 @@ titanx() {
       printf "    %-14s %s\n" "Version"      "${version:-(unknown)}"
       printf "    %-14s %s\n" "Last updated" "${last_updated:-(never)}"
       printf "    %-14s %s\n" "Agent"        "$agent"
-      printf "    %-14s %s\n" "Project"      "$DIR"
+      printf "    %-14s %s\n" "Project"      "$PROJECT_DIR"
       echo ""
       ;;
     -u|--update)
@@ -366,7 +368,7 @@ titanx() {
       echo ""
       ;;
     *)
-      cd "$DIR" && "$agent" ${model:+--model "$model"}
+      cd "$PROJECT_DIR" && "$agent" ${model:+--model "$model"}
       ;;
   esac
 }
@@ -387,10 +389,13 @@ SH_EOF
   cat >> "$tmp" << FUNCEOF
 
 # titanx shell integration
-[ -f "${target}/titanx.sh" ] && source "${target}/titanx.sh"
+[ -f "$HOME/.titanx/titanx.sh" ] && source "$HOME/.titanx/titanx.sh"
 FUNCEOF
 
   cat "$tmp" > "$ALIAS_RC"; rm "$tmp"
+
+  # Write project path so titanx() can resolve the project directory
+  echo "$TARGET" > "$titanx_dir/project"
 }
 
 # --- HEADER ---
@@ -443,12 +448,25 @@ else
 fi
 echo
 
+# 1b) separate operational files into ~/.titanx --------------------------------
+echo -e " ${COLOR_BOLD}Step 1b: Separating Operational Files${COLOR_RESET}"
+TITANX_DOTDIR="$HOME/.titanx"
+mkdir -p "$TITANX_DOTDIR"
+for f in update.sh conf.txt manifest.txt version.txt; do
+  if [ -f "$TARGET/$f" ]; then
+    cp "$TARGET/$f" "$TITANX_DOTDIR/$f"
+    rm "$TARGET/$f"
+  fi
+done
+echo -e "   ${symbol_success} Operational files → ${COLOR_CYAN}$TITANX_DOTDIR/${COLOR_RESET}"
+echo
+
 # 2) agent selection + shell function -----------------------------------------
 echo -e " ${COLOR_BOLD}Step 2: AI Agent & Shell Integration${COLOR_RESET}"
 
 # Read current agent from conf.txt if it exists (re-install / --force case)
 current_agent=""
-[ -f "$TARGET/conf.txt" ] && current_agent=$(grep '^AGENT=' "$TARGET/conf.txt" 2>/dev/null | cut -d= -f2)
+[ -f "$HOME/.titanx/conf.txt" ] && current_agent=$(grep '^AGENT=' "$HOME/.titanx/conf.txt" 2>/dev/null | cut -d= -f2)
 
 select_agent "$current_agent"
 write_agent_conf "$SELECTED_AGENT"
