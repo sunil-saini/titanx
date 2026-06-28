@@ -203,7 +203,7 @@ select_agent() {
     return
   fi
 
-  echo -e " ${symbol_arrow} ${COLOR_BOLD}Select AI Agent:${COLOR_RESET}"
+  echo -e " ${COLOR_BOLD}Select AI Agent:${COLOR_RESET}"
   for idx in "${!entries[@]}"; do
     local bin="${entries[$idx]}" label="${labels[$idx]}"
     local marker="  "
@@ -368,7 +368,12 @@ titanx() {
       echo ""
       ;;
     *)
-      cd "$PROJECT_DIR" && "$agent" ${model:+--model "$model"}
+      if [ -n "${1:-}" ]; then
+        echo "Unknown option: $1"
+        titanx -h
+      else
+        cd "$PROJECT_DIR" && "$agent" ${model:+--model "$model"}
+      fi
       ;;
   esac
 }
@@ -449,7 +454,6 @@ fi
 echo
 
 # 1b) separate operational files into ~/.titanx --------------------------------
-echo -e " ${COLOR_BOLD}Step 1b: Separating Operational Files${COLOR_RESET}"
 TITANX_DOTDIR="$HOME/.titanx"
 mkdir -p "$TITANX_DOTDIR"
 for f in update.sh conf.txt manifest.txt version.txt; do
@@ -458,8 +462,6 @@ for f in update.sh conf.txt manifest.txt version.txt; do
     rm "$TARGET/$f"
   fi
 done
-echo -e "   ${symbol_success} Operational files → ${COLOR_CYAN}$TITANX_DOTDIR/${COLOR_RESET}"
-echo
 
 # 2) agent selection + shell function -----------------------------------------
 echo -e " ${COLOR_BOLD}Step 2: AI Agent & Shell Integration${COLOR_RESET}"
