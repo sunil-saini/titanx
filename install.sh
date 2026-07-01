@@ -535,7 +535,7 @@ titanx() {
                 local _new="${_entries[$_selected_idx]}"
                 if [ -f "$CONF" ]; then
                   local _tmp; _tmp=$(mktemp)
-                  grep -v '^AGENT=' "$CONF" > "$_tmp"
+                  grep -v '^AGENT=' "$CONF" > "$_tmp" || true
                   printf 'AGENT=%s\n' "$_new" >> "$_tmp"
                   cat "$_tmp" > "$CONF"; rm -f "$_tmp"
                 fi
@@ -681,17 +681,12 @@ fi
 
 # 1) scaffold ----------------------------------------------------------------
 echo -e " ${COLOR_BOLD}Step 1: Scaffolding Project${COLOR_RESET}"
-if [ -e "$TARGET" ] && [ "$FORCE" -ne 1 ]; then
-  echo -e "   ${symbol_warn} Project directory already exists."
-  echo -e "     ${COLOR_GRAY}Leaving it as-is. Run with ${COLOR_RESET}--force${COLOR_GRAY} to refresh from template.${COLOR_RESET}"
+mkdir -p "$TARGET"
+if cp -R "$TEMPLATE/." "$TARGET/"; then
+  echo -e "   ${symbol_success} Scaffolded ops console into: ${COLOR_CYAN}$TARGET${COLOR_RESET}"
 else
-  mkdir -p "$TARGET"
-  if cp -R "$TEMPLATE/." "$TARGET/"; then
-    echo -e "   ${symbol_success} Scaffolded ops console into: ${COLOR_CYAN}$TARGET${COLOR_RESET}"
-  else
-    echo -e "   ${symbol_error} Failed to copy template files to $TARGET"
-    exit 1
-  fi
+  echo -e "   ${symbol_error} Failed to copy template files to $TARGET"
+  exit 1
 fi
 echo
 
