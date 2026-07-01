@@ -549,20 +549,40 @@ titanx() {
     -x|--uninstall)
       echo ""
       echo "  Uninstalling titanx..."
-      local rc_file=""
-      case "${SHELL##*/}" in
-        zsh)  rc_file="$HOME/.zshrc" ;;
-        bash) rc_file="$HOME/.bashrc" ;;
-      esac
-      if [ -n "$rc_file" ] && [ -f "$rc_file" ]; then
-        local tmp; tmp=$(mktemp)
-        grep -v -e "^# titanx shell integration" -e "titanx\.sh" "$rc_file" > "$tmp"
-        cat "$tmp" > "$rc_file"; rm -f "$tmp"
-        echo "  Removed shell integration from $rc_file"
-      fi
-      for d in "$DIR" "$PROJECT_DIR"; do
-        [ -d "$d" ] && rm -rf "$d" && echo "  Removed $d"
+      
+      # 1) Clean up shell integrations from all common shell config files
+      local rc_files=("$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile")
+      for rc in "${rc_files[@]}"; do
+        if [ -f "$rc" ]; then
+          local tmp; tmp=$(mktemp)
+          awk '
+            /titanx\.sh/ { next }
+            /# titanx shell integration/ { next }
+            /^titanx\(\)/ { skip=1 }
+            skip && /^\}/ { skip=0; next }
+            skip { next }
+            { print }
+          ' "$rc" > "$tmp"
+          cat "$tmp" > "$rc"; rm -f "$tmp"
+          echo "  Cleaned shell integrations from $rc"
+        fi
       done
+
+      # 2) Resolve project directory from ~/.titanx/project before deleting it
+      local proj_dir=""
+      [ -f "$HOME/.titanx/project" ] && proj_dir=$(cat "$HOME/.titanx/project" | tr -d '[:space:]')
+      proj_dir=${proj_dir:-$HOME/titanx}
+
+      # 3) Remove directories
+      if [ -d "$proj_dir" ]; then
+        rm -rf "$proj_dir"
+        echo "  Removed project directory: $proj_dir"
+      fi
+      if [ -d "$HOME/.titanx" ]; then
+        rm -rf "$HOME/.titanx"
+        echo "  Removed configuration directory: ~/.titanx"
+      fi
+
       echo "  titanx uninstalled. Restart your shell or run: exec ${SHELL##*/}"
       echo ""
       ;;
