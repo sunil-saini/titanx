@@ -704,8 +704,12 @@ TITANX_DOTDIR="$HOME/.titanx"
 mkdir -p "$TITANX_DOTDIR"
 for f in update.sh doctor.sh configure.sh conf.txt manifest.txt version.txt; do
   if [ -f "$TARGET/$f" ]; then
-    cp "$TARGET/$f" "$TITANX_DOTDIR/$f"
-    rm "$TARGET/$f"
+    if [ "$f" = "conf.txt" ] && [ -f "$TITANX_DOTDIR/conf.txt" ]; then
+      rm "$TARGET/$f"
+    else
+      cp "$TARGET/$f" "$TITANX_DOTDIR/$f"
+      rm "$TARGET/$f"
+    fi
   fi
 done
 
